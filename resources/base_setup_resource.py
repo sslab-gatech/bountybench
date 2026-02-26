@@ -225,7 +225,12 @@ class BaseSetupResource(BaseResource, ABC):
                 if health_status == "healthy":
                     logger.debug(f"Container '{container}' is healthy.")
                     container_queue.get()
-                elif health_status != "starting":
+                elif health_status in ("starting", "unhealthy"):
+                    # Keep waiting — containers may need more time to start up
+                    logger.debug(
+                        f"Container '{container}' has status '{health_status}', waiting..."
+                    )
+                else:
                     logger.warning(f"Container '{container}' is not healthy.")
                     container_logs = run_command(
                         command=["docker", "logs", container], verbose=False

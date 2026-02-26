@@ -111,7 +111,9 @@ class OpenAIModels(ModelProvider):
             raise
 
     def tokenize(self, model: str, message: str) -> List[int]:
+        logger.info("TEST")
         encoding = tiktoken.encoding_for_model("gpt-4o")
+        logger.info(f"TEST {message}")
         return encoding.encode(message)
 
     def decode(self, model: str, tokens: List[int]) -> str:

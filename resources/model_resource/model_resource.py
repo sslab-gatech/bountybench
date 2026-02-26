@@ -1,3 +1,4 @@
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -79,7 +80,7 @@ class ModelResourceConfig(BaseResourceConfig):
             raise ValueError("max_input_tokens must be positive")
         if self.max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
-        if not self.use_mock_model:
+        if not self.use_mock_model and not ModelResource._use_litellm():
             verify_and_auth_api_key(self.model, self.use_helm)
 
 
@@ -121,6 +122,16 @@ class ModelResource(RunnableBaseResource):
             else None
         )
 
+    @staticmethod
+    def _use_litellm() -> bool:
+        from dotenv import find_dotenv, load_dotenv
+        from pathlib import Path
+
+        env_path = Path(find_dotenv())
+        if env_path.is_file():
+            load_dotenv(dotenv_path=env_path)
+        return bool(os.environ.get("LITELLM_API_KEY") and os.environ.get("LITELLM_BASE_URL"))
+
     def get_model_provider(self) -> ModelProvider:
         """
         Get the appropriate model provider based on the model type.
@@ -129,6 +140,14 @@ class ModelResource(RunnableBaseResource):
         """
         if self.use_mock_model:
             return None
+
+        if self._use_litellm():
+            from resources.model_resource.litellm_models.litellm_models import (
+                LiteLLMModels,
+            )
+
+            return LiteLLMModels()
+
         if self.helm:
             model_provider = HelmModels()
         else:

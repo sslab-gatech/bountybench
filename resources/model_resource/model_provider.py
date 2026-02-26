@@ -107,7 +107,7 @@ class ModelProvider(ABC):
         def run_request():
             try:
                 response = self.request(
-                    model, message, temperature, max_tokens, stop_sequences
+                    model.split("/")[1], message, temperature, max_tokens, stop_sequences
                 )
                 response_holder[0] = response
             except Exception as e:

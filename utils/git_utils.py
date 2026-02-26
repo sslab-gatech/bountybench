@@ -1,4 +1,6 @@
+import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -9,6 +11,40 @@ from utils.logger import get_main_logger
 logger = get_main_logger(__name__)
 
 PathLike = Union[Path, str]
+
+
+def _force_remove_readonly(func, path, _exc_info):
+    """Error handler for shutil.rmtree to remove read-only or permission-denied files."""
+    os.chmod(path, stat.S_IRWXU)
+    func(path)
+
+
+def _git_clean(directory: Path, flags: str = "-fd") -> None:
+    """Run git clean, falling back to manual removal on permission errors."""
+    try:
+        _run_git_command(directory, ["clean", flags])
+    except subprocess.CalledProcessError:
+        # git clean failed (likely permission denied) — remove untracked files manually
+        logger.warning("git clean failed, falling back to manual removal of untracked files")
+        result = subprocess.run(
+            ["git", "clean", "-dn" if "x" not in flags else "-dxn"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+        )
+        for line in result.stdout.splitlines():
+            # Lines look like "Would remove path/to/file"
+            if line.startswith("Would remove "):
+                rel_path = line[len("Would remove "):]
+                full_path = directory / rel_path
+                try:
+                    if full_path.is_dir():
+                        shutil.rmtree(full_path, onexc=lambda fn, p, e: _force_remove_readonly(fn, p, e))
+                    else:
+                        full_path.chmod(stat.S_IRWXU)
+                        full_path.unlink()
+                except Exception as e:
+                    logger.warning(f"Could not remove {full_path}: {e}")
 
 
 def _run_git_command(
@@ -161,7 +197,7 @@ def git_reset(
 
         # Clean untracked files if requested
         if clean:
-            _run_git_command(directory, ["clean", "-fd"])
+            _git_clean(directory, "-fd")
             logger.debug(f"Cleaned untracked files in {directory}")
 
     except subprocess.CalledProcessError as e:
@@ -192,7 +228,7 @@ def git_checkout(
     try:
         # Clean first if requested
         if clean:
-            _run_git_command(directory, ["clean", "-fdx"])
+            _git_clean(directory, "-fdx")
 
         _run_git_command(directory, cmd)
     except subprocess.CalledProcessError as e:
@@ -252,9 +288,8 @@ def git_clean(directory_path: PathLike, remove_ignored: bool = False) -> None:
     flags = "-fd"
     if remove_ignored:
         flags += "x"
-    cmd = ["clean", flags]
 
-    _run_git_command(directory, cmd)
+    _git_clean(directory, flags)
     logger.debug(f"Cleaned untracked files in {directory}")
 
 
@@ -337,6 +372,8 @@ def git_init_repo(directory_path: PathLike, ignore_dirs: list[str] = None) -> No
     try:
         # Initialize repo and set main branch
         _run_git_command(directory, ["init"])
+        _run_git_command(directory, ["add", "."])
+        _run_git_command(directory, ["commit", "-m", "'init'"])
         _run_git_command(directory, ["branch", "-m", "main"])
 
         # Create basic .gitignore
@@ -738,6 +775,12 @@ def cleanup_git_branches(destination):
         deleted_branches = delete_git_branches(destination, exclude_branches=[])
         if deleted_branches:
             logger.debug(f"Deleted branches: {', '.join(deleted_branches)}")
+
+        # Remove stale remote refs that cause git gc to fail
+        remotes_dir = Path(destination) / ".git" / "refs" / "remotes"
+        if remotes_dir.exists():
+            shutil.rmtree(remotes_dir)
+            logger.debug(f"Removed stale remote refs from {remotes_dir}")
 
         # Garbage collect to ensure deleted branches are completely removed
         subprocess.run(
